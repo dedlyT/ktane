@@ -3,7 +3,7 @@ import asyncio
 import random
 import time
 
-core = ktane.Module()
+core = ktane.Module("timer")
 lcd = ktane.LCD(0x27)
 btn = ktane.Button(16, "down")
 bzrLow = ktane.Buzzer(18)
@@ -45,10 +45,24 @@ async def on_timer_update(current_time):
     if cock >= 1:
         pass_time = f"{hr_time}:{min_time}:{sec_time}"
 
-    lcd.text("---", 1, align="center")
+    if core._x == 3:
+        await die()
+        return
+
+    text = ""
+    for i in range(core._x):
+        text += "X"
+    rangeNum = 3 - core._x
+    for i in range(rangeNum):
+        text += "-"
+
+    lcd.text(text, 1, align="center")
     lcd.text(pass_time, 2, align="center")
     
     clc_time = core.default_time - calc_time
+
+    await core.send(f"{clc_time}\n")
+
     if clc_time > 180:
         await bzrLow.buzz(1, 0.1)    
     elif clc_time == 180:
@@ -68,23 +82,35 @@ async def on_timer_update(current_time):
     elif clc_time > 0 and clc_time < 30:
         await bzrHgh.buzz(1, 0.1)
     elif clc_time == 0:
+        await die()
+        return
+
+
+@core.event
+async def on_message_recieved(msg):
+    if msg == "module X":
+        print("WRONG!")
+        core._x += 1
         await bzrHgh.buzz(1)
-        await bzrMid.buzz(1)
         await bzrLow.buzz(1)
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.1)
         await bzrHgh.buzz(0)
-        await bzrMid.buzz(0)
         await bzrLow.buzz(0)
-        lcd.text("",1)
-        lcd.text("",2)
-        await asyncio.sleep(1)
-        await turnOff()
+    if msg == "module Y":
+        print("CORRECT!")
+    if msg in ("module X", "module Y"):
+        text = ""
+        for i in range(core._x):
+            text += "X"
+        rangeNum = 3 - core._x
+        for i in range(rangeNum):
+            text += "-"
+        lcd.text(text, 1, align="center")
         
 
 @core.event
-async def on_button_pressed(button, state):
-    if state:
-        thing = not core.on
+async def on_button_pressed(button):
+    thing = not core.on
     
     if thing:
         await turnOn()
@@ -109,6 +135,7 @@ async def turnOn():
     core._hour = 0
     core._day = 0
     core._old_sec = 0
+    core._x = 0
     lcd.text("TURNING ON", 1, align="center")
     lcd.text("", 2, align="center")
     await asyncio.sleep(1)
@@ -116,6 +143,21 @@ async def turnOn():
     print(core.on)
     lcd.text("", 1)
     lcd.text("", 2)
+
+
+async def die():
+    await bzrHgh.buzz(1)
+    await bzrMid.buzz(1)
+    await bzrLow.buzz(1)
+    await asyncio.sleep(1)
+    await bzrHgh.buzz(0)
+    await bzrMid.buzz(0)
+    await bzrLow.buzz(0)
+    lcd.text("",1)
+    lcd.text("",2)
+    await asyncio.sleep(1)
+    await turnOff()
+    return
 
 
 async def level_up(num):

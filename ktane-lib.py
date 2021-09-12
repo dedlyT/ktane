@@ -10,6 +10,7 @@ FUNCS = [
     "on_ready",
     "on_timer_update",
     "on_button_pressed",
+    "on_button_unpressed",
     "on_message_recieved"]
 TIME_INCS = [
     "sec",
@@ -32,11 +33,12 @@ GPIO.setmode(GPIO.BOARD)
 
 class Module(object):
 
-    def __init__(self, *args):
+    def __init__(self, name="module", *args):
         for func in FUNCS:
             exec(f"self._{func} = self._empty")
 
         self.__tasks = [self._empty]
+        self.__name = name
         self._buttons = []
         self.default_time = 300
 
@@ -66,7 +68,7 @@ class Module(object):
     
     #Send UART
     async def send(self, txt: str):
-        SEND_UART.write(bytes(f"{txt}\n", encoding="utf8"))
+        SEND_UART.write(bytes(f"{self.__name} {txt}\n", encoding="utf8"))
 
     #Main loop
     async def __loop(self):
@@ -80,7 +82,7 @@ class Module(object):
                 self._old_sec = 0
                 await self._on_timer_update((self._sec, self._min, self._hour, self._day))
 
-            #on_button_pressed()
+            #on_button_pressed() /// on_button_unpressed()
             for btn in self._buttons:
                 btn_button = btn[0]
                 btn_state = btn[1]
@@ -91,6 +93,7 @@ class Module(object):
                     await asyncio.sleep(0.05)
                     if not btn_button.input() and btn_state:
                         btn[1] = False
+                        await self._on_button_unpressed(btn_button)
 
             #on_message_recieved()
             if RECIEVE_UART.in_waiting > 0:
@@ -204,33 +207,42 @@ class Button(object):
 
 class LED(object):
 
-	def __init__(self, pin, type="single"):
-		self.type = type
-		if self.type == "single":
-			self.pin = pin
-			GPIO.setup(self.pin, GPIO.OUT)
-		elif self.type == "rgb":
-			self.pinr = pin[0]
-			self.ping = pin[1]
-			self.pinb = pin[2]
-		else:
-			raise ValueError("'type' must be either 'single' or 'rgb'")
+    def __init__(self, pin, type="single"):
+        self.type = type
+        if self.type == "single":
+            self.pin = pin
+            GPIO.setup(self.pin, GPIO.OUT)
+        elif self.type == "rgb":
+            self.pinr = pin[0]
+            self.ping = pin[1]
+            self.pinb = pin[2]
+            GPIO.setup(self.pinr, GPIO.OUT)
+            GPIO.setup(self.ping, GPIO.OUT)
+            GPIO.setup(self.pinb, GPIO.OUT)
+        else:
+            raise ValueError("'type' must be either 'single' or 'rgb'")
 
-	def state(self, power=None):
-		if power == None:
-			return GPIO.input(self.pin)
-		elif self.type == "single":
-			if power in (1, GPIO.HIGH, True, 0, GPIO.LOW, False):
-				GPIO.output(self.pin, power)
-			else:
-				raise ValueError("'power' must be either 'GPIO.HIGH' or 'GPIO.LOW'")
-		elif self.type == "rgb":
-			thing = ["r", "g", "b"]
-			for i in range(0,2):
-				if power[i] in (0, 1, False, True, GPIO.LOW, GPIO.HIGH):
-					exec(f"GPIO.output(self.pin{thing[i]}, power[i])")
-				else:
-					raise ValueError(f"'power' value '{i}' must be either 'GPIO.HIGH' or 'GPIO.LOW'")
+    def state(self, power=None):
+        if power == None:
+            if self.type == "single":
+                return GPIO.input(self.pin)
+            elif self.type == "rgb":
+                rin = GPIO.input(self.pinr)
+                gin = GPIO.input(self.ping)
+                bin = GPIO.input(self.pinb)
+                return (rin, gin, bin)
+        elif self.type == "single":
+            if power in (1, GPIO.HIGH, True, 0, GPIO.LOW, False):
+                GPIO.output(self.pin, power)
+            else:
+                raise ValueError("'power' must be either 'GPIO.HIGH' or 'GPIO.LOW'")
+        elif self.type == "rgb":
+            thing = ["r", "g", "b"]
+            for i in range(0,3):
+                if power[i] in (0, 1, False, True, GPIO.LOW, GPIO.HIGH):
+                    exec(f"GPIO.output(self.pin{thing[i]}, power[i])")
+                else:
+                    raise ValueError(f"'power' value '{i}' must be either 'GPIO.HIGH' or 'GPIO.LOW'")
 
 
 class Buzzer(object):
