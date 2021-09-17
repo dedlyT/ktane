@@ -22,7 +22,7 @@ This uses raspberry pis as the main controller, since it's the only one I know a
 
 ### [**Timer**](timer.py) \[ID:0\]
 
-_[Confused?](https://ktane.fandom.com/wiki/The_Button)_
+_[Confused?](https://ktane.fandom.com/wiki/Timer)_
 
 This is the **core module**, it must be **always present** in a bomb. It does the main logic for the game (i.e. bomb explosion, countdown, etc)
 
@@ -50,7 +50,7 @@ Wiring:
 
 ### [**Button**](button.py) \[ID:1\]
 
-_[Confused?](https://ktane.fandom.com/wiki/Timer)_
+_[Confused?](https://ktane.fandom.com/wiki/The_Button)_
 
 This is one of the most basic modules, and the very first to be made (after the timer). It does what it says on the tin; there's a button that you have to press. However, you do have to follow certain rules for it to be defused correctly
 
