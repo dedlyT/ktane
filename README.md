@@ -72,6 +72,6 @@ Wiring:
 - `16:` `\[BTN\] +`
 
 References:
-- `ID: 0` Timer
+- `ID: 0` [Timer](https://github.com/dedlyT/ktane/blob/main/README.md#timer-id0)
 
 ---------
