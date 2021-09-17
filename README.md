@@ -37,14 +37,14 @@ This module contains:
 
 Wiring:
 - `1:` `+`
-- `2:` `\[LCD\] +`
-- `3:` `\[LCD\] SDA`
-- `5:` `\[LCD\] SCL`
+- `2:` `[LCD] +`
+- `3:` `[LCD] SDA`
+- `5:` `[LCD] SCL`
 - `6:` `-`
-- `13:` `\[BZR\] (MID) + `
-- `15:` `\[BZR\] (HGH) +`
-- `16:` `\[BTN\] (PWR) +`
-- `18:` `\[BZR\] (LOW) +`
+- `13:` `[BZR] (MID) + `
+- `15:` `[BZR] (HGH) +`
+- `16:` `[BTN] (PWR) +`
+- `18:` `[BZR] (LOW) +`
 
 ---------
 
@@ -66,10 +66,10 @@ This module contains:
 Wiring:
 - `1:` `+`
 - `6:` `-`
-- `11:` `\[RGB\] (RED) +`
-- `13:` `\[RGB\] (GRN) +`
-- `15:` `\[RGB\] (BLU) +`
-- `16:` `\[BTN\] +`
+- `11:` `[RGB] (RED) +`
+- `13:` `[RGB] (GRN) +`
+- `15:` `[RGB] (BLU) +`
+- `16:` `[BTN] +`
 
 References:
 - `ID: 0` [Timer](https://github.com/dedlyT/ktane/blob/main/README.md#timer-id0)
