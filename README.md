@@ -1,6 +1,6 @@
 # KTaNE
 The project files for the real life keep talking and nobody explodes replica i'm working on. 
-This uses raspberry pis as the main controller, since it's the only one I know and have because I'm not splurging 80 euro for an arduino 😉
+This uses raspberry pis as the main controller, since it's the only one I know, I have and because I'm not splurging 80 euro for an arduino 😉
 
 
 ## Please do this and don't ignore
