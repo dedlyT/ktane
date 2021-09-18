@@ -33,7 +33,7 @@ GPIO.setmode(GPIO.BOARD)
 
 class Module(object):
 
-    def __init__(self, name="module", *args):
+    def __init__(self, name, *args):
         for func in FUNCS:
             exec(f"self._{func} = self._empty")
 

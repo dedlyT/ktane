@@ -3,7 +3,7 @@ import asyncio
 import random
 import time
 
-core = ktane.Module()
+core = ktane.Module(1)
 led = ktane.LED((11,13,15), "rgb")
 btn = ktane.Button(16, "down")
 

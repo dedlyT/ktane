@@ -3,7 +3,7 @@ import asyncio
 import random
 import time
 
-core = ktane.Module("timer")
+core = ktane.Module(0)
 lcd = ktane.LCD(0x27)
 btn = ktane.Button(16, "down")
 bzrLow = ktane.Buzzer(18)
