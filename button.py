@@ -1,4 +1,4 @@
-import ktane_lib as ktane
+import ktanelib as ktane
 import asyncio
 import random
 import time
