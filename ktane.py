@@ -16,21 +16,26 @@ FUNCS = [
 ]
 
 
+
 class Module:
     
-    def __init__(self):
+    def __init__(self, **kwargs):
         self.__io = []
         self.__buttons = []
         self.__tasks = []
         self.__internal_time = 0
 
-        self.time = {}
+        if "identifier" not in kwargs.keys():
+            raise ValueError("Module missing identifier!")
+        self.identifier = kwargs["identifier"]
+
+        self.__time = {}
         for t in ("s","m","h"):
-            self.time[t] = 0
+            self.__time[t] = 0
 
         self.__funcs = {}
         for func in FUNCS:
-            self.__funcs[func] = self.__empty
+            self.__funcs[func] = self._empty
 
     def event(self, func): #DECORATOR
         if func.__name__ in FUNCS:
@@ -44,7 +49,7 @@ class Module:
             list = None
             if isinstance(obj, Button): list = self.__buttons
             if isinstance(obj, IO): 
-                if obj.type == GPIO.IN: raise Exception(f"IO {obj.pin} cannot be initialised; it is set up as an input!")
+                if obj.type == GPIO.OUT: raise Exception(f"IO {obj.pin} cannot be initialised; it is set up as an output!")
                 list = self.__io
 
             if list is not None:
@@ -53,7 +58,27 @@ class Module:
     def get_time(self):
         return self.time
 
-    async def __empty(self, *args, **kwargs): pass
+    @classmethod
+    async def _empty(self, *args, **kwargs): pass
+
+    @property
+    def time(self): return self.__time
+
+    @time.setter
+    def time(self, val):
+        if type(val) not in (list, dict, int, float): raise ValueError("`time` attribute must be dict or list!")
+        
+        if type(val) in (int, float):
+            for t in ("s", "m", "h"):
+                self.__time[t] = val
+        
+        if val is list:
+            for i,v in enumerate(val): 
+                self.__time[("s", "m", "h")[i]] = v
+        
+        if val is dict:
+            for t,v in val.items():
+                self.__time[t] = v
 
     async def __run(self):
         self.__internal_time = time.time()
@@ -66,29 +91,33 @@ class Module:
                 run_coros += [task()]
 
             #TIME
-            if (time.time() - self.__internal_time) > 1:
+            if (time.time() - self.__internal_time) >= 1:
                 self.__internal_time = time.time()
                 time_calls = []
-                self.time["s"]+=1
+                self.__time["s"]+=1
                 time_calls += ["on_second_passed"]
-                if self.time["s"]>=60:
-                    self.time["s"]=0
-                    self.time["m"]+=1
+                if self.__time["s"]>=60:
+                    self.__time["s"]=0
+                    self.__time["m"]+=1
                     time_calls += ["on_minute_passed"]
-                    if self.time["m"]>=60:
-                        self.time["m"]=0
-                        self.time["h"]+=1
+                    if self.__time["m"]>=60:
+                        self.__time["m"]=0
+                        self.__time["h"]+=1
                         time_calls += ["on_hour_passed"]
                 for time_call in time_calls:
-                    run_coros += [self.__funcs[time_call](self.time)]
+                    run_coros += [self.__funcs[time_call](self.__time)]
 
             #BUTTONS
             for button in self.__buttons:
                 obj = button["obj"]
                 val = button["val"]
                 if val != obj.value():
-                    if obj.value(): run_coros += [self.__funcs["on_button_pressed"](obj)]
-                    if not obj.value(): run_coros += [self.__funcs["on_button_unpressed"](obj)]
+                    if obj.value(): 
+                        run_coros += [obj.pressed()]
+                        run_coros += [self.__funcs["on_button_pressed"](obj)]
+                    if not obj.value(): 
+                        run_coros += [obj.unpressed()]
+                        run_coros += [self.__funcs["on_button_unpressed"](obj)]
                     button["val"] = obj.value()
             
             #IO
@@ -96,8 +125,12 @@ class Module:
                 obj = io["obj"]
                 val = io["val"]
                 if val != obj.value():
-                    if obj.value(): run_coros += [self.__funcs["on_io_rise"](obj)]
-                    if not obj.value(): run_coros += [self.__funcs["on_io_fall"](obj)]
+                    if obj.value(): 
+                        run_coros += [obj.rise()]
+                        run_coros += [self.__funcs["on_io_rise"](obj)]
+                    if not obj.value(): 
+                        run_coros += [obj.fall()]
+                        run_coros += [self.__funcs["on_io_fall"](obj)]
                     io["val"] = obj.value()
 
             asyncio.gather(*run_coros)
@@ -105,6 +138,7 @@ class Module:
 
     def run(self):
         asyncio.run(self.__run())
+
 
 
 class IO:
@@ -116,6 +150,7 @@ class IO:
         self.val = None
         self.type = (GPIO.IN, GPIO.OUT)[type]
         self.pud = (GPIO.PUD_DOWN, GPIO.PUD_UP)[kwargs["pud"]]
+        self.__handlers = {"rise": Module._empty, "fall": Module._empty}
 
         settings = [self.pin, self.type] if self.type == GPIO.OUT else [self.pin, self.type, self.pud]
         GPIO.setup(*settings)
@@ -130,15 +165,50 @@ class IO:
         if self.type is GPIO.PUD_DOWN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
         return self.value(not self.val)
 
+    @property
+    def rise(self): return self.__handlers["rise"]
+
+    @rise.setter
+    def rise(self, func):
+        if not callable(func): raise ValueError(f"Handler for `rise` must be a function!")
+        self.__handlers["rise"] = func
+    
+    @property
+    def fall(self): return self.__handlers["fall"]
+    
+    @fall.setter
+    def fall(self, func):
+        if not callable(func): raise ValueError(f"Handler for `fall` must be a function!")
+        self.__handlers["fall"] = func
+
+
 
 class Button:
 
     def __init__(self, pin, pud=False):
         self.pin = pin
         self.__obj = IO(self.pin, False, pud=pud)
+        self.__handlers = {"pressed": Module._empty, "unpressed": Module._empty}
     
     def value(self):
         return self.__obj.value()
+
+    @property
+    def pressed(self): return self.__handlers["pressed"]
+
+    @pressed.setter
+    def pressed(self, func):
+        if not callable(func): raise ValueError(f"Handler for `pressed` must be a function!")
+        self.__handlers["pressed"] = func
+    
+    @property
+    def unpressed(self): return self.__handlers["unpressed"]
+    
+    @unpressed.setter
+    def unpressed(self, func):
+        if not callable(func): raise ValueError(f"Handler for `unpressed` must be a function!")
+        self.__handlers["unpressed"] = func
+
 
 
 class LED:
