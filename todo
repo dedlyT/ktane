@@ -1,0 +1,13 @@
+#TIMER
+[X] Power switch
+[X] Timer
+[X] Strikes
+[] Buzzer
+
+#BUTTON
+[] Rewrite backend for micropython
+[] Randomised RGB led
+[] Fail based off of timer (messaging?)
+[] Write UART communication code
+[] Sending strikes
+[] Bricking/Resetting

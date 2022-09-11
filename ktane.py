@@ -24,6 +24,7 @@ class Module:
         self.__buttons = []
         self.__tasks = []
         self.__internal_time = 0
+        self.paused = False
 
         if "identifier" not in kwargs.keys():
             raise ValueError("Module missing identifier!")
@@ -53,7 +54,7 @@ class Module:
                 list = self.__io
 
             if list is not None:
-                list += [{ "obj":obj, "val":False }]
+                list += [{ "obj":obj, "val":None }]
     
     def get_time(self):
         return self.time
@@ -82,6 +83,7 @@ class Module:
 
     async def __run(self):
         self.__internal_time = time.time()
+        self.__started = False
         asyncio.gather(self.__funcs["on_ready"]())
         
         while True:
@@ -89,7 +91,7 @@ class Module:
             run_coros = []
             for task in self.__tasks:
                 run_coros += [task()]
-
+            
             #TIME
             if (time.time() - self.__internal_time) >= 1:
                 self.__internal_time = time.time()
@@ -104,8 +106,9 @@ class Module:
                         self.__time["m"]=0
                         self.__time["h"]+=1
                         time_calls += ["on_hour_passed"]
-                for time_call in time_calls:
-                    run_coros += [self.__funcs[time_call](self.__time)]
+                if not self.paused:
+                    for time_call in time_calls:
+                        run_coros += [self.__funcs[time_call](self.__time)]
 
             #BUTTONS
             for button in self.__buttons:
@@ -113,10 +116,16 @@ class Module:
                 val = button["val"]
                 if val != obj.value():
                     if obj.value(): 
-                        run_coros += [obj.pressed()]
+                        if not self.__started:
+                            if obj.pressed_start: run_coros += [obj.pressed()]
+                        else: 
+                            run_coros += [obj.pressed()]
                         run_coros += [self.__funcs["on_button_pressed"](obj)]
-                    if not obj.value(): 
-                        run_coros += [obj.unpressed()]
+                    if not obj.value():
+                        if not self.__started:
+                            if obj.unpressed_start: run_coros += [obj.unpressed()]
+                        else: 
+                            run_coros += [obj.unpressed()]
                         run_coros += [self.__funcs["on_button_unpressed"](obj)]
                     button["val"] = obj.value()
             
@@ -126,14 +135,21 @@ class Module:
                 val = io["val"]
                 if val != obj.value():
                     if obj.value(): 
-                        run_coros += [obj.rise()]
+                        if not self.__started:
+                            if obj.rise_start: run_coros += [obj.rise()]
+                        else: 
+                            run_coros += [obj.rise()]
                         run_coros += [self.__funcs["on_io_rise"](obj)]
                     if not obj.value(): 
-                        run_coros += [obj.fall()]
+                        if not self.__started:
+                            if obj.fall_start: run_coros += [obj.fall()]
+                        else: 
+                            run_coros += [obj.fall()]
                         run_coros += [self.__funcs["on_io_fall"](obj)]
                     io["val"] = obj.value()
 
             asyncio.gather(*run_coros)
+            self.__started = True
             await asyncio.sleep(0.001)
 
     def run(self):
@@ -150,7 +166,8 @@ class IO:
         self.val = None
         self.type = (GPIO.IN, GPIO.OUT)[type]
         self.pud = (GPIO.PUD_DOWN, GPIO.PUD_UP)[kwargs["pud"]]
-        self.__handlers = {"rise": Module._empty, "fall": Module._empty}
+        self.__handlers = {"rise": {"func":Module._empty, "on_startup":True}, 
+                            "fall": {"func":Module._empty, "on_startup":True}}
 
         settings = [self.pin, self.type] if self.type == GPIO.OUT else [self.pin, self.type, self.pud]
         GPIO.setup(*settings)
@@ -165,21 +182,25 @@ class IO:
         if self.type is GPIO.PUD_DOWN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
         return self.value(not self.val)
 
-    @property
-    def rise(self): return self.__handlers["rise"]
+    #DECORATOR
+    def handler(self, type, on_startup=True):
+        def decorator(func):
+            if type not in self.__handlers.keys(): raise ValueError(f"`{type}` is not a handler!")
+            self.__handlers[type]["func"] = func
+            self.__handlers[type]["on_startup"] = on_startup
+        return decorator
 
-    @rise.setter
-    def rise(self, func):
-        if not callable(func): raise ValueError(f"Handler for `rise` must be a function!")
-        self.__handlers["rise"] = func
+    @property
+    def rise(self): return self.__handlers["rise"]["func"]
+
+    @property
+    def rise_start(self): return self.__handlers["rise"]["on_startup"]
     
     @property
-    def fall(self): return self.__handlers["fall"]
-    
-    @fall.setter
-    def fall(self, func):
-        if not callable(func): raise ValueError(f"Handler for `fall` must be a function!")
-        self.__handlers["fall"] = func
+    def fall(self): return self.__handlers["fall"]["func"]
+
+    @property
+    def fall_start(self): return self.__handlers["fall"]["on_startup"]
 
 
 
@@ -188,26 +209,31 @@ class Button:
     def __init__(self, pin, pud=False):
         self.pin = pin
         self.__obj = IO(self.pin, False, pud=pud)
-        self.__handlers = {"pressed": Module._empty, "unpressed": Module._empty}
+        self.__handlers = {"pressed": {"func":Module._empty, "on_startup":True}, 
+                        "unpressed": {"func": Module._empty, "on_startup":True}}
     
     def value(self):
         return self.__obj.value()
 
-    @property
-    def pressed(self): return self.__handlers["pressed"]
+    #DECORATOR
+    def handler(self, type, on_startup=True):
+        def decorator(func):
+            if type not in self.__handlers.keys(): raise ValueError(f"`{type}` is not a handler!")
+            self.__handlers[type]["func"] = func
+            self.__handlers[type]["on_startup"] = on_startup
+        return decorator
 
-    @pressed.setter
-    def pressed(self, func):
-        if not callable(func): raise ValueError(f"Handler for `pressed` must be a function!")
-        self.__handlers["pressed"] = func
+    @property
+    def pressed(self): return self.__handlers["pressed"]["func"]
+
+    @property
+    def pressed_start(self): return self.__handlers["pressed"]["on_startup"]
     
     @property
-    def unpressed(self): return self.__handlers["unpressed"]
-    
-    @unpressed.setter
-    def unpressed(self, func):
-        if not callable(func): raise ValueError(f"Handler for `unpressed` must be a function!")
-        self.__handlers["unpressed"] = func
+    def unpressed(self): return self.__handlers["unpressed"]["func"]
+
+    @property
+    def unpressed_start(self): return self.__handlers["unpressed"]["on_startup"]
 
 
 
