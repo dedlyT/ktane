@@ -3,11 +3,15 @@
 [X] Timer
 [X] Strikes
 [] Buzzer
+[] LCD
 
 #BUTTON
-[] Rewrite backend for micropython
+[X] Rewrite backend for micropython
 [] Randomised RGB led
 [] Fail based off of timer (messaging?)
 [] Write UART communication code
 [] Sending strikes
 [] Bricking/Resetting
+
+#MAZE
+[] LED matrix for maze?

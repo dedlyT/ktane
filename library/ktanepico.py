@@ -1,11 +1,10 @@
-import RPi.GPIO as GPIO
-import asyncio
+import machine as m
+import uasyncio
 import time
-
-GPIO.setmode(GPIO.BOARD)
 
 FUNCS = [
     "on_ready",
+    "on_message_received",
     "on_second_passed",
     "on_minute_passed",
     "on_hour_passed",
@@ -20,13 +19,18 @@ FUNCS = [
 class Module:
     
     def __init__(self, **kwargs):
+        self.__run_coros = []
+        self.__run_coros_buf = []
         self.__io = []
         self.__buttons = []
         self.__tasks = []
         self.__internal_time = 0
+        self.__UART = m.UART(0, 115200)
+        self.__UART_buf = []
+        self.__UART_msg = ""
         self.paused = False
 
-        if "identifier" not in kwargs.keys():
+        if "identifier" not in kwargs.keys(): 
             raise ValueError("Module missing identifier!")
         self.identifier = kwargs["identifier"]
 
@@ -50,7 +54,7 @@ class Module:
             list = None
             if isinstance(obj, Button): list = self.__buttons
             if isinstance(obj, IO): 
-                if obj.type == GPIO.OUT: raise Exception(f"IO {obj.pin} cannot be initialised; it is set up as an output!")
+                if obj.type == m.Pin.OUT: raise Exception(f"IO {obj.pin} cannot be initialised; it is set up as an output!")
                 list = self.__io
 
             if list is not None:
@@ -58,6 +62,21 @@ class Module:
     
     def get_time(self):
         return self.time
+    
+    def send(self, msg):
+        self.__UART_buf += [msg]
+    
+    async def __read_uart(self):
+        b = self.__UART.readline()
+        if b == b"\x00": return
+
+        rx = b.decode("utf-8")
+        self.__UART_msg += rx
+
+        if rx.endswith("\n"):
+            args = self.__UART_msg[:-1].split(":")
+            self.__run_coros_buf += [self.__funcs["on_message_received"](*args)]
+            self.__UART_msg = ""
 
     @classmethod
     async def _empty(self, *args, **kwargs): pass
@@ -84,13 +103,13 @@ class Module:
     async def __run(self):
         self.__internal_time = time.time()
         self.__started = False
-        asyncio.gather(self.__funcs["on_ready"]())
+        await uasyncio.gather(self.__funcs["on_ready"]())
         
         while True:
             #TASKS
-            run_coros = []
+            self.__run_coros = []
             for task in self.__tasks:
-                run_coros += [task()]
+                self.__run_coros += [task()]
             
             #TIME
             if (time.time() - self.__internal_time) >= 1:
@@ -108,7 +127,7 @@ class Module:
                         time_calls += ["on_hour_passed"]
                 if not self.paused:
                     for time_call in time_calls:
-                        run_coros += [self.__funcs[time_call](self.__time)]
+                        self.__run_coros += [self.__funcs[time_call](self.__time)]
 
             #BUTTONS
             for button in self.__buttons:
@@ -117,16 +136,16 @@ class Module:
                 if val != obj.value():
                     if obj.value(): 
                         if not self.__started:
-                            if obj.pressed_start: run_coros += [obj.pressed()]
+                            if obj.pressed_start: self.__run_coros += [obj.pressed()]
                         else: 
-                            run_coros += [obj.pressed()]
-                        run_coros += [self.__funcs["on_button_pressed"](obj)]
+                            self.__run_coros += [obj.pressed()]
+                        self.__run_coros += [self.__funcs["on_button_pressed"](obj)]
                     if not obj.value():
                         if not self.__started:
-                            if obj.unpressed_start: run_coros += [obj.unpressed()]
+                            if obj.unpressed_start: self.__run_coros += [obj.unpressed()]
                         else: 
-                            run_coros += [obj.unpressed()]
-                        run_coros += [self.__funcs["on_button_unpressed"](obj)]
+                            self.__run_coros += [obj.unpressed()]
+                        self.__run_coros += [self.__funcs["on_button_unpressed"](obj)]
                     button["val"] = obj.value()
             
             #IO
@@ -136,24 +155,38 @@ class Module:
                 if val != obj.value():
                     if obj.value(): 
                         if not self.__started:
-                            if obj.rise_start: run_coros += [obj.rise()]
+                            if obj.rise_start: self.__run_coros += [obj.rise()]
                         else: 
-                            run_coros += [obj.rise()]
-                        run_coros += [self.__funcs["on_io_rise"](obj)]
+                            self.__run_coros += [obj.rise()]
+                        self.__run_coros += [self.__funcs["on_io_rise"](obj)]
                     if not obj.value(): 
                         if not self.__started:
-                            if obj.fall_start: run_coros += [obj.fall()]
+                            if obj.fall_start: self.__run_coros += [obj.fall()]
                         else: 
-                            run_coros += [obj.fall()]
-                        run_coros += [self.__funcs["on_io_fall"](obj)]
+                            self.__run_coros += [obj.fall()]
+                        self.__run_coros += [self.__funcs["on_io_fall"](obj)]
                     io["val"] = obj.value()
 
-            asyncio.gather(*run_coros)
+            #UART SEND
+            if len(self.__UART_buf)>0:
+                msg = self.__UART_buf.pop(0)
+                tx = f"{self.identifier}:{msg}\n"
+                self.__UART.write(tx.encode())
+
+            #UART RECEIVE
+            if self.__UART.any():
+                await self.__read_uart()
+            
+            #ADD BUFFER
+            self.__run_coros += [c for c in self.__run_coros_buf]
+
+            await uasyncio.gather(*self.__run_coros)
             self.__started = True
-            await asyncio.sleep(0.001)
+            await uasyncio.sleep_ms(1)
 
     def run(self):
-        asyncio.run(self.__run())
+        print("called entry point")
+        uasyncio.run(self.__run())
 
 
 
@@ -164,22 +197,24 @@ class IO:
 
         self.pin = pin
         self.val = None
-        self.type = (GPIO.IN, GPIO.OUT)[type]
-        self.pud = (GPIO.PUD_DOWN, GPIO.PUD_UP)[kwargs["pud"]]
+        self.type = (m.Pin.IN, m.Pin.OUT)[type]
+        self.pud = (m.Pin.PULL_DOWN, m.Pin.PULL_UP)[kwargs["pud"]]
         self.__handlers = {"rise": {"func":Module._empty, "on_startup":True}, 
                             "fall": {"func":Module._empty, "on_startup":True}}
 
-        settings = [self.pin, self.type] if self.type == GPIO.OUT else [self.pin, self.type, self.pud]
-        GPIO.setup(*settings)
+        settings = [self.pin, self.type] if self.type == m.Pin.OUT else [self.pin, self.type, self.pud]
+        self.__obj = m.Pin(*settings)
 
     def value(self, val=None):
         self.val = val
-        if val is None: return GPIO.input(self.pin)
-        if self.type is GPIO.PUD_DOWN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
-        return GPIO.output(self.pin, val)
+        if val is None:
+            if self.type is m.Pin.OUT: return self.val
+            return self.__obj.value()
+        if self.type is m.Pin.IN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
+        return self.__obj.value(val)
 
     def switch(self):
-        if self.type is GPIO.PUD_DOWN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
+        if self.type is m.Pin.IN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
         return self.value(not self.val)
 
     #DECORATOR
@@ -263,3 +298,5 @@ class LED:
         if self.pin2 is not None:
             self.__obj2.switch()
             self.__obj3.switch()
+
+

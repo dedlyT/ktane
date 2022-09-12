@@ -1,0 +1,168 @@
+import machine as m
+import utime as u
+
+EVENTS = [
+    "ready",
+    "message_recieved",
+    "second_passed",
+    "minute_passed",
+    "hour_passed",
+    "button_pressed",
+    "button_unpressed",
+    "io_rise",
+    "io_fall"
+]
+
+
+
+class Module:
+
+    def __init__(self, name):
+        self.name = name
+        self._time = [0,0,0,0]
+        self._buttons = []
+        self._IOs = []
+        self._tasks = []
+        self._UART = m.UART(1, baudrate=9600, rx=m.Pin(5), tx=m.Pin(4), timeout=2)
+        self._UARTq = []
+
+        self._events = {}
+        for event in EVENTS:
+            self._events[f"on_{event}"] = self.__empty__
+
+    def __empty__(self, *args, **kwargs):
+        pass
+
+    def init(self, obj):
+        if isinstance(obj, Button):
+            self._buttons += [[obj, False]]
+        if isinstance(obj, IO):
+            self._IOs += [[obj, False]]
+    
+    def event(self, func):
+        f = func.__name__.lower()
+        if f[3:] in EVENTS:
+            self._events[f] = func
+
+    def task(self, func):
+        self._tasks += [func]
+
+    def get_time(self, ms=False):
+        if ms:
+            return self._time
+        else:
+            return self._time[:3]
+
+    def send(self, msg):
+        self._UARTq+=[msg]
+        pass
+
+    def __loop__(self):
+        self._events["on_ready"]()
+        while True:
+            
+            self._time[3]+=2
+            if self._time[3]==1000:
+                self._time[3]=0
+                self._time[2]+=1
+                self._events["on_second_passed"](self.get_time())
+                if self._time[2]==60:
+                    self._time[2]=0
+                    self._time[1]+=1
+                    self._events["on_minute_passed"](self.get_time())
+                    if self._time[1]==60:
+                        self._time[1]=0
+                        self._time[0]+=1
+                        self._events["on_hour_passed"](self.get_time())
+
+            for button_data in self._buttons:
+                button = button_data[0]
+                button_prev = button_data[1]
+                button_val = button.value()
+                if button_val != button_prev:
+                    if button_val:
+                        self._events["on_button_pressed"](button)
+                    else:
+                        self._events["on_button_unpressed"](button)
+                    button_data[1] = button_val
+            
+            for io_data in self._IOs:
+                io = io_data[0]
+                io_prev = io_data[1]
+                io_val = io.value()
+                if io_val != io_prev:
+                    if io_val:
+                        self._events["on_io_rise"](io)
+                    else:
+                        self._events["on_io_fall"](io)
+                    io_data[1] = io_val
+
+            if len(self._UARTq)>0:
+                s = self._UARTq[0].encode("utf-8")
+                self._UART.write(s)
+                self._UARTq.pop(0)
+
+            for task in self._tasks:
+                task()
+
+            try:
+                res = self._UART.readline()
+                if res is not None:
+                    resP = res.decode("utf-8")
+                    self._events["on_message_recieved"](resP)
+            except Exception as e:
+                print(e)
+
+    
+    def start(self):
+        self.__loop__()
+        
+
+
+
+class Button:
+
+    def __init__(self, pin):
+        self._pin = pin
+        self._obj = m.Pin(self._pin, m.Pin.IN, m.Pin.PULL_DOWN)
+
+    def value(self):
+        return self._obj.value()
+
+
+
+class IO:
+
+    def __init__(self, pin, type, pud=None):
+        self._pin = pin
+
+        if type in (0, -1, "IN", m.Pin.IN, False):
+            self._type = m.Pin.IN
+        elif type in (1, "OUT", m.Pin.OUT, True):
+            self._type = m.Pin.OUT
+        else:
+            raise ValueError(f"Argument 'type' must be -1 or 1, not {type}!")
+
+        if pud is not None:
+            if pud in (0, -1, False, "DOWN", m.Pin.PULL_DOWN):
+                self._pud = m.Pin.PULL_DOWN
+            elif pud in (1, True, "UP", m.Pin.PULL_UP):
+                self._pud = m.Pin.PULL_UP
+            else:
+                raise ValueError(f"Argument 'pud' must be either 0 or 1, not {pud}!")
+        
+        if pud is None:
+            self._obj = m.Pin(self._pin, self._type)
+        else:
+            self._obj = m.Pin(self._pin, self._type, self._pud)
+        
+    def value(self, val=None):
+        if val is None:
+            return self._obj.value()
+        else:
+            if val in (0, -1, False, "off"):
+                val = 0
+            if val in (1, True, "on"):
+                val = 1
+            
+            self._obj.value(val)
