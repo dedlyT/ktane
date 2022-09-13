@@ -1,11 +1,13 @@
 import RPi.GPIO as GPIO
 import asyncio
+import serial
 import time
 
 GPIO.setmode(GPIO.BOARD)
 
 FUNCS = [
     "on_ready",
+    "on_message_received",
     "on_second_passed",
     "on_minute_passed",
     "on_hour_passed",
@@ -20,10 +22,21 @@ FUNCS = [
 class Module:
     
     def __init__(self, **kwargs):
+        self.__run_coros_buf = []
         self.__io = []
         self.__buttons = []
         self.__tasks = []
         self.__internal_time = 0
+        self.__UART = serial.Serial(
+            port = "/dev/ttyS0",
+            baudrate = 115200,
+            parity = serial.PARITY_NONE,
+            stopbits = serial.STOPBITS_ONE,
+            bytesize = serial.EIGHTBITS,
+            timeout = 1
+        )
+        self.__UART_buf = []
+        self.__UART_msg = ""
         self.paused = False
 
         if "identifier" not in kwargs.keys(): 
@@ -55,9 +68,9 @@ class Module:
 
             if list is not None:
                 list += [{ "obj":obj, "val":None }]
-    
-    def get_time(self):
-        return self.time
+
+    def send(self, msg):
+        self.__UART_buf += [msg]
 
     @classmethod
     async def _empty(self, *args, **kwargs): pass
@@ -147,6 +160,27 @@ class Module:
                             run_coros += [obj.fall()]
                         run_coros += [self.__funcs["on_io_fall"](obj)]
                     io["val"] = obj.value()
+
+            #UART SEND
+            if len(self.__UART_buf):
+                msg = self.__UART_buf.pop(0)
+                rx = f"{self.identifier}:{msg}\n"
+                self.__UART.write(rx.encode("utf-8"))
+            
+            #UART RECIEVE
+            if self.__UART.inWaiting():
+                b = self.__UART.read(self.__UART.inWaiting())
+                if b != b"\x00":
+                    rx = b.decode("utf-8")
+                    self.__UART_msg += rx
+                    if self.__UART_msg.endswith("\n"):
+                        args = self.__UART_msg[:-1].split(":")
+                        run_coros += [self.__funcs["on_message_received"](*args)]
+                        self.__UART_msg = ""
+
+            #EMPTY BUFFER
+            run_coros += self.__run_coros_buf
+            self.__run_coros_buf = []
 
             asyncio.gather(*run_coros)
             self.__started = True

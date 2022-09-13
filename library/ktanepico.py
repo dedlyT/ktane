@@ -19,7 +19,6 @@ FUNCS = [
 class Module:
     
     def __init__(self, **kwargs):
-        self.__run_coros = []
         self.__run_coros_buf = []
         self.__io = []
         self.__buttons = []
@@ -60,23 +59,8 @@ class Module:
             if list is not None:
                 list += [{ "obj":obj, "val":None }]
     
-    def get_time(self):
-        return self.time
-    
     def send(self, msg):
         self.__UART_buf += [msg]
-    
-    async def __read_uart(self):
-        b = self.__UART.readline()
-        if b == b"\x00": return
-
-        rx = b.decode("utf-8")
-        self.__UART_msg += rx
-
-        if rx.endswith("\n"):
-            args = self.__UART_msg[:-1].split(":")
-            self.__run_coros_buf += [self.__funcs["on_message_received"](*args)]
-            self.__UART_msg = ""
 
     @classmethod
     async def _empty(self, *args, **kwargs): pass
@@ -107,9 +91,9 @@ class Module:
         
         while True:
             #TASKS
-            self.__run_coros = []
+            run_coros = []
             for task in self.__tasks:
-                self.__run_coros += [task()]
+                run_coros += [task()]
             
             #TIME
             if (time.time() - self.__internal_time) >= 1:
@@ -127,7 +111,7 @@ class Module:
                         time_calls += ["on_hour_passed"]
                 if not self.paused:
                     for time_call in time_calls:
-                        self.__run_coros += [self.__funcs[time_call](self.__time)]
+                        run_coros += [self.__funcs[time_call](self.__time)]
 
             #BUTTONS
             for button in self.__buttons:
@@ -136,16 +120,16 @@ class Module:
                 if val != obj.value():
                     if obj.value(): 
                         if not self.__started:
-                            if obj.pressed_start: self.__run_coros += [obj.pressed()]
+                            if obj.pressed_start: run_coros += [obj.pressed()]
                         else: 
-                            self.__run_coros += [obj.pressed()]
-                        self.__run_coros += [self.__funcs["on_button_pressed"](obj)]
+                            run_coros += [obj.pressed()]
+                        run_coros += [self.__funcs["on_button_pressed"](obj)]
                     if not obj.value():
                         if not self.__started:
-                            if obj.unpressed_start: self.__run_coros += [obj.unpressed()]
+                            if obj.unpressed_start: run_coros += [obj.unpressed()]
                         else: 
-                            self.__run_coros += [obj.unpressed()]
-                        self.__run_coros += [self.__funcs["on_button_unpressed"](obj)]
+                            run_coros += [obj.unpressed()]
+                        run_coros += [self.__funcs["on_button_unpressed"](obj)]
                     button["val"] = obj.value()
             
             #IO
@@ -155,16 +139,16 @@ class Module:
                 if val != obj.value():
                     if obj.value(): 
                         if not self.__started:
-                            if obj.rise_start: self.__run_coros += [obj.rise()]
+                            if obj.rise_start: run_coros += [obj.rise()]
                         else: 
-                            self.__run_coros += [obj.rise()]
-                        self.__run_coros += [self.__funcs["on_io_rise"](obj)]
+                            run_coros += [obj.rise()]
+                        run_coros += [self.__funcs["on_io_rise"](obj)]
                     if not obj.value(): 
                         if not self.__started:
-                            if obj.fall_start: self.__run_coros += [obj.fall()]
+                            if obj.fall_start: run_coros += [obj.fall()]
                         else: 
-                            self.__run_coros += [obj.fall()]
-                        self.__run_coros += [self.__funcs["on_io_fall"](obj)]
+                            run_coros += [obj.fall()]
+                        run_coros += [self.__funcs["on_io_fall"](obj)]
                     io["val"] = obj.value()
 
             #UART SEND
@@ -175,12 +159,22 @@ class Module:
 
             #UART RECEIVE
             if self.__UART.any():
-                await self.__read_uart()
-            
-            #ADD BUFFER
-            self.__run_coros += [c for c in self.__run_coros_buf]
+                b = self.__UART.read(self.__UART.any())
+                if b != b"\x00":
+                    rx = b.decode("utf-8")
+                    self.__UART_msg += rx
+                    print(self.__UART_msg)
 
-            await uasyncio.gather(*self.__run_coros)
+                    if rx.endswith("\n"):
+                        args = self.__UART_msg[:-1].split(":")
+                        run_coros += [self.__funcs["on_message_received"](*args)]
+                        self.__UART_msg = ""
+            
+            #EMPTY BUFFER
+            run_coros += self.__run_coros_buf
+            self.__run_coros_buf = []
+
+            await uasyncio.gather(*run_coros)
             self.__started = True
             await uasyncio.sleep_ms(1)
 
@@ -253,7 +247,7 @@ class Button:
     #DECORATOR
     def handler(self, type, on_startup=True):
         def decorator(func):
-            if type not in self.__handlers.keys(): raise ValueError(f"`{type}` is not a handler!")
+            if type not in self.__handlers.keys(): raise ValueError(f"`{type}` is not a valid handler!")
             self.__handlers[type]["func"] = func
             self.__handlers[type]["on_startup"] = on_startup
         return decorator
@@ -298,5 +292,3 @@ class LED:
         if self.pin2 is not None:
             self.__obj2.switch()
             self.__obj3.switch()
-
-
