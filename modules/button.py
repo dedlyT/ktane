@@ -1,25 +1,30 @@
-import ktanepico as ktane
+import ktane
 
-module = ktane.Module(identifier="BTN")
-send_button = ktane.Button(15)
-led = ktane.IO(25,1)
+module = ktane.Module(identifier="B")
+module.status_led = ktane.LED(36, 38, 40)
+module.game_state = -1
 
 @module.event
 async def on_ready():
-    led.value(0)
-    
-    module.init(send_button)
+    module.status_led.value(0)
 
-    print("-"*10)
+    setup()
+    module.status_led.value(0,1,0)
+
+    print("-"*20)
     print("READY!")
-
-@send_button.handler("pressed")
-async def send_msg():
-    module.send("hi!")
-    print("SENT!")
 
 @module.event
 async def on_message_received(auth, msg):
-    print(f"{auth} >> {msg}")
+    if msg == "@~":
+        return
+
+    if msg.startswith("@~STATE"):
+        state = msg.split(" ")[1]
+        module.game_state = int(state)
+        return
+
+def setup():
+    pass
 
 module.run()

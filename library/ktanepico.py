@@ -1,5 +1,6 @@
 import machine as m
 import uasyncio
+import random
 import time
 
 FUNCS = [
@@ -13,25 +14,41 @@ FUNCS = [
     "on_io_rise",
     "on_io_fall"
 ]
-
+STATUS_LED_STATES = {
+    -3: (1,1,1),
+    -2: (1,0,0),
+    -1: (0,0,0),
+    0: (0,1,0),
+    1: (1,0,1)
+}
 
 
 class Module:
     
     def __init__(self, **kwargs):
+        self.__id = "".join([str(random.randint(0,9)) for i in range(5)])
+        
         self.__run_coros_buf = []
         self.__io = []
         self.__buttons = []
         self.__tasks = []
         self.__internal_time = 0
-        self.__UART = m.UART(0, 115200)
+        self.__UART = m.UART(1, 115200, timeout=1)
         self.__UART_buf = []
-        self.__UART_msg = ""
-        self.paused = False
+        self.__connected_modules = {}
+        self.__status_led = None
+        self.__status_led_time = 0
+        self.__status_led_state = 0
+        self.__setup = False
+        self.led_state = -1
 
         if "identifier" not in kwargs.keys(): 
             raise ValueError("Module missing identifier!")
         self.identifier = kwargs["identifier"]
+        
+        if self.identifier == "T": 
+            self.__id = 0
+            self.__setup = True
 
         self.__time = {}
         for t in ("s","m","h"):
@@ -59,14 +76,23 @@ class Module:
             if list is not None:
                 list += [{ "obj":obj, "val":None }]
     
-    def send(self, msg):
-        self.__UART_buf += [msg]
+    def send(self, auth, msg):
+        self.__UART_buf += [(False, auth, msg)]
 
     @classmethod
     async def _empty(self, *args, **kwargs): pass
 
     @property
     def time(self): return self.__time
+
+    @property
+    def id(self): return self.__id
+
+    @property
+    def modules(self): return self.__connected_modules
+
+    @property
+    def status_led(self): return self.__status_led
 
     @time.setter
     def time(self, val):
@@ -84,18 +110,91 @@ class Module:
             for t,v in val.items():
                 self.__time[t] = v
 
-    async def __run(self):
-        self.__internal_time = time.time()
-        self.__started = False
-        await uasyncio.gather(self.__funcs["on_ready"]())
-        
+    @status_led.setter
+    def status_led(self, led_obj):
+        if not isinstance(led_obj, LED): raise ValueError("`status_led` attribute must be a `ktane.LED`!")
+        self.__status_led = led_obj
+
+    #CORE THREADS
+    async def __status_led_thread(self):
         while True:
-            #TASKS
-            run_coros = []
-            for task in self.__tasks:
-                run_coros += [task()]
+            await uasyncio.sleep(0)
+            if self.__setup is False:
+                if time.time() >= self.__status_led_time:
+                    if self.__status_led_state == 1:
+                        self.__status_led_state = 0
+                        self.__status_led.value(1,1,0)
+                        self.__status_led_time = (time.time() + 1)
+                    else:
+                        self.__status_led_state = 1
+                        self.__status_led.value(0,0,0)
+                        self.__status_led_time = (time.time() + 1)
+                continue
             
-            #TIME
+            self.__status_led.value(STATUS_LED_STATES[self.led_state])
+
+    async def __UART_buffer(self):
+        while True:
+            if len(self.__UART_buf)>0:
+                data = self.__UART_buf.pop(0)
+
+                passing = data[0]
+                auth = data[1]
+                msg = data[2]
+
+                tx = f"{self.identifier}:{self.__id}:{auth}>{msg}\n"
+                if passing: tx = f"{msg}\n"
+
+                self.__UART.write(tx.encode("utf-8"))
+            
+            if self.__UART.any():
+                b = self.__UART.readline()
+                if b != b"\x00":
+                    try:
+                        rx = b.decode("utf-8")[:-1]
+                    except UnicodeError:
+                        print(f"UNICODE ERROR! ({b})")
+                        continue
+
+                    args = rx.split(">")
+                    address = args[0].split(":")
+
+                    msg = args[1]
+
+                    #Is message mine?
+                    if address[1] == str(self.__id):
+                        if msg == "@~SETUP": 
+                            self.led_state = -2
+                            self.__setup = None
+                            print("setup failed.")
+                        continue
+
+                    #Is message for me?
+                    if address[2] in ("-1", str(self.__id)):
+                        if address[2] == "-1":
+                            if str(self.__id) != "0": self.__UART_buf += [(True, None, rx)]
+                        
+                        if msg == "@~SETUP":
+                            self.__connected_modules[address[1]] = {"type": address[0], "defused": False}
+                            self.send(address[1], "@~SETUP_OK")
+                            continue
+                        if msg == "@~SEND_SETUP":
+                            self.send(0, "@~SETUP")
+                            continue
+                        if msg == "@~SETUP_OK":
+                            self.led_state = 0
+                            self.__setup = True
+                            print("setup complete!")
+                            continue
+                        
+                        self.__run_coros_buf += [self.__funcs["on_message_received"](tuple(address[0:2]), msg)]
+                    else:
+                        self.__UART_buf += [(True, None, rx)]
+            
+            await uasyncio.sleep(0)
+    
+    async def __time_tracker(self):
+        while True:
             if (time.time() - self.__internal_time) >= 1:
                 self.__internal_time = time.time()
                 time_calls = []
@@ -109,10 +208,17 @@ class Module:
                         self.__time["m"]=0
                         self.__time["h"]+=1
                         time_calls += ["on_hour_passed"]
-                if not self.paused:
-                    for time_call in time_calls:
-                        run_coros += [self.__funcs[time_call](self.__time)]
+                for time_call in time_calls:
+                    self.__run_coros_buf += [self.__funcs[time_call](self.__time)]
+            
+            await uasyncio.sleep(0)
 
+    async def __main_loop(self):
+        self.__internal_time = time.time()
+        self.__started = False
+        await uasyncio.gather(self.__funcs["on_ready"]())
+        
+        while True:
             #BUTTONS
             for button in self.__buttons:
                 obj = button["obj"]
@@ -120,16 +226,16 @@ class Module:
                 if val != obj.value():
                     if obj.value(): 
                         if not self.__started:
-                            if obj.pressed_start: run_coros += [obj.pressed()]
+                            if obj.pressed_start: self.__run_coros_buf += [obj.pressed()]
                         else: 
-                            run_coros += [obj.pressed()]
-                        run_coros += [self.__funcs["on_button_pressed"](obj)]
+                            self.__run_coros_buf += [obj.pressed()]
+                        self.__run_coros_buf += [self.__funcs["on_button_pressed"](obj)]
                     if not obj.value():
                         if not self.__started:
-                            if obj.unpressed_start: run_coros += [obj.unpressed()]
+                            if obj.unpressed_start: self.__run_coros_buf += [obj.unpressed()]
                         else: 
-                            run_coros += [obj.unpressed()]
-                        run_coros += [self.__funcs["on_button_unpressed"](obj)]
+                            self.__run_coros_buf += [obj.unpressed()]
+                        self.__run_coros_buf += [self.__funcs["on_button_unpressed"](obj)]
                     button["val"] = obj.value()
             
             #IO
@@ -139,47 +245,43 @@ class Module:
                 if val != obj.value():
                     if obj.value(): 
                         if not self.__started:
-                            if obj.rise_start: run_coros += [obj.rise()]
+                            if obj.rise_start: self.__run_coros_buf += [obj.rise()]
                         else: 
-                            run_coros += [obj.rise()]
-                        run_coros += [self.__funcs["on_io_rise"](obj)]
+                            self.__run_coros_buf += [obj.rise()]
+                        self.__run_coros_buf += [self.__funcs["on_io_rise"](obj)]
                     if not obj.value(): 
                         if not self.__started:
-                            if obj.fall_start: run_coros += [obj.fall()]
+                            if obj.fall_start: self.__run_coros_buf += [obj.fall()]
                         else: 
-                            run_coros += [obj.fall()]
-                        run_coros += [self.__funcs["on_io_fall"](obj)]
+                            self.__run_coros_buf += [obj.fall()]
+                        self.__run_coros_buf += [self.__funcs["on_io_fall"](obj)]
                     io["val"] = obj.value()
-
-            #UART SEND
-            if len(self.__UART_buf)>0:
-                msg = self.__UART_buf.pop(0)
-                tx = f"{self.identifier}:{msg}\n"
-                self.__UART.write(tx.encode())
-
-            #UART RECEIVE
-            if self.__UART.any():
-                b = self.__UART.read(self.__UART.any())
-                if b != b"\x00":
-                    rx = b.decode("utf-8")
-                    self.__UART_msg += rx
-                    print(self.__UART_msg)
-
-                    if rx.endswith("\n"):
-                        args = self.__UART_msg[:-1].split(":")
-                        run_coros += [self.__funcs["on_message_received"](*args)]
-                        self.__UART_msg = ""
             
             #EMPTY BUFFER
-            run_coros += self.__run_coros_buf
-            self.__run_coros_buf = []
-
-            await uasyncio.gather(*run_coros)
+            self.__run_coros_buf += [x() for x in self.__tasks]
+            while self.__run_coros_buf:
+                coro = self.__run_coros_buf.pop(0)
+                task = uasyncio.create_task(coro)
+                await task
+            
             self.__started = True
-            await uasyncio.sleep_ms(1)
+            await uasyncio.sleep(0)
+    
+    async def __run(self):
+        if str(self.__id) != "0":
+            self.__UART_buf += [(False, 0, "@~SETUP")]
+
+        task1 = uasyncio.create_task(self.__main_loop())
+        task2 = uasyncio.create_task(self.__UART_buffer())
+        task3 = uasyncio.create_task(self.__time_tracker())
+        task4 = uasyncio.create_task(self.__status_led_thread())
+
+        await task1
+        await task2
+        await task3
+        await task4
 
     def run(self):
-        print("called entry point")
         uasyncio.run(self.__run())
 
 
@@ -282,10 +384,15 @@ class LED:
             self.__obj3 = IO(self.pin3, True)
     
     def value(self, val1, val2=None, val3=None):
-        self.__obj1.value(val1)
-        if val2 is not None:
-            self.__obj2.value(val2)
-            self.__obj3.value(val3)
+        if isinstance(val1, tuple) or isinstance(val1, list):
+            objs = [self.__obj1, self.__obj2, self.__obj3]
+            for obj,val in zip(objs, val1):
+                obj.value(val)
+        else:
+            self.__obj1.value(val1)
+            if val2 is not None:
+                self.__obj2.value(val2)
+                self.__obj3.value(val3)
     
     def switch(self):
         self.__obj1.switch()

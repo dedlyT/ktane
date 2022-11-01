@@ -1,75 +1,92 @@
-import random
+"""
+RED = FAILED TO SETUP
+FLASHING YELLOW = SETTING UP
+GREEN = ON
+NONE = OFF
+PURPLE = DISABLED
+"""
+
 import ktane
+import asyncio
 
 module = ktane.Module(identifier="T")
-module.state = 0
-module.prev_s = 0
-module.strikes = 0
+module.strike_leds = ktane.LED(11, 13, 15)
+module.power_switch = ktane.Button(18)
+module.buzzer = ktane.IO(16, 1)
+module.status_led = ktane.LED(36, 38, 40)
 
-power_switch = ktane.IO(11, 0)
-button = ktane.Button(8)
-led1 = ktane.IO(3,1)
-led2 = ktane.IO(5,1)
-led3 = ktane.IO(7,1)
+module.MAX_STRIKES = 3
+module.previous_strikes = None
+module.game_state = 0
+module.strikes = 0
 
 @module.event
 async def on_ready():
-    print("penis!\n")
+    module.init(module.power_switch)
 
-    module.paused = power_switch.value()
-    module.init(power_switch)
-    module.init(button)
+    setup()
+    module.led_state = 0
+
+    print("-"*20)
+    print("STARTED!")
 
 @module.event
 async def on_second_passed(t):
-    print(f"{t['h']}:{t['m']}:{t['s']}")
-
-@module.task
-async def fail_vfx():
-    if module.state != -1: return
-
-    seconds = module.time["s"] + module.time["m"]*60 + module.time["h"]*3600
-    if seconds - module.prev_s >= 1:
-        module.prev_s = seconds
-        for led in (led1,led2,led3): led.switch()
-
-@module.task
-async def strike_manager():
-    if module.state == -1: return
-
-    if module.strikes>=3:
-        print("BOOOOOOOOOOOOOOOM!")
-        module.paused = True
-        module.state = -1
-        module.strikes = 0
-        module.prev_s = -1
+    if module.game_state != 0: return
     
-    vals = [0,0,0]
-    for i in range(module.strikes): vals[i] = 1
+    print(f"{t['h']}:{t['m']}:{t['s']}")
+    await buzz(0.1)
 
-    for led,val in zip((led1,led2,led3),vals):
-        led.value(val)
+@module.event
+async def on_message_received(auth, msg):
+    if module.game_state != 0: return
 
-@power_switch.handler("rise")
-async def power_on():
-    print("POWERING ON!")
-    module.state = 1
-
-    module.strikes = 0
-    module.time = 0
-    module.paused = False
-
-@power_switch.handler("fall")
-async def power_off():
-    module.paused = True
-    module.strikes = 0
-
-    print("POWERING OFF!")
-    module.state = 0
-
-@button.handler("pressed", False)
-async def add_strike():
-    if module.state>0:
+    if msg == "@~STRIKE":
         module.strikes+=1
+
+@module.power_switch.handler("pressed")
+async def turn_on():
+    print("\n... TURNED ON!")
+
+    setup()
+    module.game_state = 0
+    module.led_state = 0
+
+    print("READY!")
+
+@module.power_switch.handler("unpressed")
+async def turn_off():
+    print("... TURNED OFF!")
+
+    module.game_state = -1 
+    module.led_state = -1
+
+@module.task
+async def strikes_manager():
+    if module.previous_strikes == module.strikes: return
+    if module.strikes >= module.MAX_STRIKES:
+        module.game_state = -1
+        module.send(-1, "@~BOOM")
+        module.led_state = -3
+
+    result = [False, False, False]
+    for i in range(module.strikes):
+        result[i] = True
+    module.strike_leds.value(*result)
+    
+    module.previous_strikes = module.strikes
+
+async def buzz(delay):
+    module.buzzer.value(1)
+    await asyncio.sleep(delay)
+    module.buzzer.value(0)
+
+def setup():
+    module.MAX_STRIKES = 3
+    module.strikes = 0
+    module.previous_strikes = None
+    module.time = 0
+
+    module.buzzer.value(0)
 
 module.run()
