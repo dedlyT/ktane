@@ -2,6 +2,7 @@ import machine as m
 import uasyncio
 import random
 import time
+import json
 
 FUNCS = [
     "on_ready",
@@ -12,7 +13,9 @@ FUNCS = [
     "on_button_pressed",
     "on_button_unpressed",
     "on_io_rise",
-    "on_io_fall"
+    "on_io_fall",
+    "on_turn_off",
+    "on_turn_on"
 ]
 STATUS_LED_STATES = {
     -3: (1,1,1),
@@ -40,7 +43,9 @@ class Module:
         self.__status_led_time = 0
         self.__status_led_state = 0
         self.__setup = False
-        self.led_state = -1
+        self.__boom = False
+        self.__bomb_data = {}
+        self.__led_state = -1
 
         if "identifier" not in kwargs.keys(): 
             raise ValueError("Module missing identifier!")
@@ -92,7 +97,13 @@ class Module:
     def modules(self): return self.__connected_modules
 
     @property
+    def bomb_data(self): return self.__bomb_data
+
+    @property
     def status_led(self): return self.__status_led
+
+    @property
+    def led_state(self): return self.__led_state
 
     @time.setter
     def time(self, val):
@@ -114,6 +125,11 @@ class Module:
     def status_led(self, led_obj):
         if not isinstance(led_obj, LED): raise ValueError("`status_led` attribute must be a `ktane.LED`!")
         self.__status_led = led_obj
+        
+    @led_state.setter
+    def led_state(self, state):
+        if state not in list(STATUS_LED_STATES.keys()): raise ValueError("Not a valid state for status LED!")
+        self.__led_state = state
 
     #CORE THREADS
     async def __status_led_thread(self):
@@ -131,7 +147,18 @@ class Module:
                         self.__status_led_time = (time.time() + 1)
                 continue
             
-            self.__status_led.value(STATUS_LED_STATES[self.led_state])
+            if self.__boom is True:
+                if time.time() >= self.__status_led_time:
+                    if self.__status_led_state == 1:
+                        self.__status_led_state = 0
+                        self.__status_led.value(1,0,0)
+                        self.__status_led_time = (time.time() + 0.5)
+                    else:
+                        self.__status_led_state = 1
+                        self.__status_led.value(0,0,0)
+                        self.__status_led_time = (time.time() + 0.5)
+            
+            self.__status_led.value(STATUS_LED_STATES[self.__led_state])
 
     async def __UART_buffer(self):
         while True:
@@ -164,7 +191,7 @@ class Module:
                     #Is message mine?
                     if address[1] == str(self.__id):
                         if msg == "@~SETUP": 
-                            self.led_state = -2
+                            self.__led_state = -2
                             self.__setup = None
                             print("setup failed.")
                         continue
@@ -182,9 +209,27 @@ class Module:
                             self.send(0, "@~SETUP")
                             continue
                         if msg == "@~SETUP_OK":
-                            self.led_state = 0
+                            self.__led_state = 0
                             self.__setup = True
+                            self.__run_coros_buf += [self.__funcs["on_turn_on"]()]
                             print("setup complete!")
+                            continue
+                        if msg == "@~TURN_OFF":
+                            self.__led_state = -1
+                            self.__run_coros_buf += [self.__funcs["on_turn_off"]()]
+                            continue
+                        if msg == "@~BOOM":
+                            self.__boom = False
+                            self.__run_coros_buf += [self.__funcs["on_turn_off"]()]
+                            continue
+                        if msg == "@~TURN_ON":
+                            self.__led_state = 0
+                            self.__boom = False
+                            self.__run_coros_buf += [self.__funcs["on_turn_on"]()]
+                            continue
+                        if msg.startswith("@~BOMB_DETAILS"):
+                            data = msg.split("#")[1]
+                            self.__bomb_data = json.loads(data)
                             continue
                         
                         self.__run_coros_buf += [self.__funcs["on_message_received"](tuple(address[0:2]), msg)]
@@ -290,16 +335,22 @@ class IO:
 
     def __init__(self, pin, type, **kwargs):
         if "pud" not in list(kwargs.keys()): kwargs["pud"] = False
+        if "pwm" not in list(kwargs.keys()): kwargs["pwm"] = False
 
         self.pin = pin
         self.val = None
         self.type = (m.Pin.IN, m.Pin.OUT)[type]
         self.pud = (m.Pin.PULL_DOWN, m.Pin.PULL_UP)[kwargs["pud"]]
+        self.pwm = kwargs["pwm"]
         self.__handlers = {"rise": {"func":Module._empty, "on_startup":True}, 
                             "fall": {"func":Module._empty, "on_startup":True}}
 
         settings = [self.pin, self.type] if self.type == m.Pin.OUT else [self.pin, self.type, self.pud]
-        self.__obj = m.Pin(*settings)
+        if self.pwm:
+            self.__obj = m.PWM(m.Pin(self.pin))
+            self.__obj.freq(1000)
+        else:
+            self.__obj = m.Pin(*settings)
 
     def value(self, val=None):
         self.val = val
@@ -307,6 +358,10 @@ class IO:
             if self.type is m.Pin.OUT: return self.val
             return self.__obj.value()
         if self.type is m.Pin.IN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
+        if self.pwm:
+            if val>1: val /= 100
+            val *= 65025
+            return self.__obj.duty_u16(val)
         return self.__obj.value(val)
 
     def switch(self):
@@ -370,18 +425,21 @@ class Button:
 
 class LED:
 
-    def __init__(self, pin1, pin2=None, pin3=None):
+    def __init__(self, pin1, pin2=None, pin3=None, **kwargs):
+        if "pwm" not in list(kwargs.keys()): kwargs["pwm"] = False
+
         self.pin1 = pin1
         self.pin2 = None
         self.pin3 = None
+        self.__pwm = kwargs["pwm"]
 
-        self.__obj1 = IO(self.pin1, True)
+        self.__obj1 = IO(self.pin1, True, pwm=self.__pwm)
 
         if pin2 is not None:
             self.pin2 = pin2
-            self.__obj2 = IO(self.pin2, True)
+            self.__obj2 = IO(self.pin2, True, pwm=self.__pwm)
             self.pin3 = pin3
-            self.__obj3 = IO(self.pin3, True)
+            self.__obj3 = IO(self.pin3, True, pwm=self.__pwm)
     
     def value(self, val1, val2=None, val3=None):
         if isinstance(val1, tuple) or isinstance(val1, list):
