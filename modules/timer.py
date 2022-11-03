@@ -56,11 +56,12 @@ async def on_message_received(auth, msg):
 
     if msg == "@~DEFUSED":
         module.modules[auth[1]]["defused"] = True
-        print("RECEIVED")
-        print(module.modules)
 
     if msg == "@~STRIKE":
         module.strikes+=1
+        for id,mod in module.modules.items():
+            if mod["type"] == "SS":
+                module.send(id, f"@~STRIKES#{module.strikes}")
 
 @module.power_switch.handler("pressed", False)
 async def turn_on():
@@ -86,7 +87,6 @@ async def turn_off():
 @module.task
 async def strikes_manager():
     if module.previous_strikes == module.strikes: return
-    if module.game_state != 0: return
 
     if module.strikes >= MAX_STRIKES:
         module.game_state = -1
