@@ -62,6 +62,11 @@ async def on_message_received(auth, msg):
         for id,mod in module.modules.items():
             if mod["type"] == "SS":
                 module.send(id, f"@~STRIKES#{module.strikes}")
+    
+    if msg in ("@~RELIEVING", "@~N_RELIEVING"):
+        for k,v in module.modules.items():
+            if k != auth[1] and not v["defused"]:
+                module.send(k, f"@~STATE#{(0, 2)[msg == '@~RELIEVING']}")
 
 @module.power_switch.handler("pressed", False)
 async def turn_on():

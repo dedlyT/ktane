@@ -128,8 +128,7 @@ async def update_correct_stages():
         module.correct_stages = [NO_VOWEL_CYPHERS[strikes][v] for v in module.stages]
 
 @module.event
-async def on_turn_on():
-    setup()
+async def on_turn_on(): setup()
 
 @module.event
 async def on_turn_off():

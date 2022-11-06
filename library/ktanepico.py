@@ -359,9 +359,7 @@ class IO:
             return self.__obj.value()
         if self.type is m.Pin.IN: raise Exception(f"IO {self.pin} was set up as an input, not an output")
         if self.pwm:
-            if val>1: val /= 100
-            val *= 65025
-            return self.__obj.duty_u16(val)
+            return self.__obj.duty_u16(round(val*500))
         return self.__obj.value(val)
 
     def switch(self):
