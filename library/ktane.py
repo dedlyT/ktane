@@ -1,3 +1,4 @@
+from smbus import SMBus
 import RPi.GPIO as GPIO
 import asyncio
 import serial
@@ -26,6 +27,22 @@ STATUS_LED_STATES = {
     -1: (0,0,0),
     0: (0,1,0),
     1: (1,0,1)
+}
+
+CLEAR_DISPLAY = 0x01
+ENABLE_BIT = 0b00000100
+LCD_BACKLIGHT = 0x08
+LCD_NOBACKLIGHT = 0x00
+LINES = {
+    1: 0x80,
+    2: 0xC0,
+    3: 0x94,
+    4: 0xD4
+}
+ALIGN_FUNC = {
+    'left': 'ljust',
+    'right': 'rjust',
+    'center': 'center'
 }
 
 
@@ -453,3 +470,70 @@ class LED:
         if self.pin2 is not None:
             self.__obj2.switch()
             self.__obj3.switch()
+
+class LCD:
+
+    def __init__(self, address=0x27, bus=1, width=16, rows=2, backlight=True):
+        self.address = address
+        self.width = width
+        self.rows = rows
+        self.backlight_status = backlight
+        self.__obj = SMBus(bus)
+        self.__setup = False
+
+    async def setup(self):
+        if self.__setup == True: raise Exception("LCD already set up!")
+
+        self.__setup = True
+        await self.write(0x33)
+        await self.write(0x32)
+        await self.write(0x06)
+        await self.write(0x0C)
+        await self.write(0x28)
+        await self.write(CLEAR_DISPLAY)
+    
+    async def _write_byte(self, b):
+        if self.__setup == False: raise Exception("LCD is not set up!")
+
+        self.__obj.write_byte(self.address, b)
+        self.__obj.write_byte(self.address, (b | ENABLE_BIT))
+        await asyncio.sleep(0.0005)
+        self.__obj.write_byte(self.address, (b & ~ENABLE_BIT))
+        await asyncio.sleep(0.0005)
+
+    async def write(self, b, mode=0):
+        if self.__setup == False: raise Exception("LCD is not set up!")
+
+        backlight_mode = LCD_BACKLIGHT if self.backlight_status else LCD_NOBACKLIGHT
+        await self._write_byte(mode | (b & 0xF0) | backlight_mode)
+        await self._write_byte(mode | ((b << 4) & 0xF0) | backlight_mode)
+    
+    async def text(self, text, line, align="left"):
+        if self.__setup == False: raise Exception("LCD is not set up!")
+
+        await self.write(LINES.get(line, LINES[1]))
+        text, other_lines = self.get_text_line(text)
+        text = getattr(text, ALIGN_FUNC.get(align, 'ljust'))(self.width)
+        for char in text:
+            await self.write(ord(char), mode=1)
+        if other_lines and line <= self.rows - 1:
+            await self.text(other_lines, line + 1, align=align)
+    
+    async def backlight(self, turn_on=True):
+        if self.__setup == False: raise Exception("LCD is not set up!")
+
+        self.backlight_status = turn_on
+        await self.write(0)
+    
+    def get_text_line(self, text):
+        line_break = self.width
+        if len(text) > self.width:
+            line_break = text[:self.width + 1].rfind(' ')
+        if line_break < 0:
+            line_break = self.width
+        return text[:line_break], text[line_break:].strip()
+
+    async def clear(self):
+        if self.__setup == False: raise Exception("LCD is not set up!")
+
+        await self.write(CLEAR_DISPLAY)
